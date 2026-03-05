@@ -62,11 +62,24 @@ from plaid.model.cra_check_report_income_insights_get_request import CraCheckRep
 from plaid.model.cra_check_report_partner_insights_get_request import CraCheckReportPartnerInsightsGetRequest
 from plaid.model.cra_pdf_add_ons import CraPDFAddOns
 from plaid.api import plaid_api
+import logging
+
+# logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(
+#     filename="server.log",     # file path
+#     filemode="a",              # append mode
+#     level=logging.INFO,        # log level
+#     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+# )
+
+# logger = logging.getLogger(__name__)
+# logger.info("Server started")
 
 load_dotenv()
 
 
 app = Flask(__name__)
+app.logger.setLevel(logging.INFO) # triggers INFO log messages to be output to "docker logs <container_id_for_python>"
 
 PLAID_CLIENT_ID = os.getenv('PLAID_CLIENT_ID')
 PLAID_SECRET = os.getenv('PLAID_SECRET')
@@ -138,16 +151,18 @@ item_id = None
 def info():
     global access_token
     global item_id
-    return jsonify({
+    ret = jsonify({
         'item_id': item_id,
         'access_token': access_token,
         'products': PLAID_PRODUCTS
     })
-
+    app.logger.info("/api/info called, returning" + str(ret))
+    return ret
 
 @app.route('/api/create_link_token_for_payment', methods=['POST'])
 def create_link_token_for_payment():
     global payment_id
+    app.logger.info("/api/create_link_token_for_payment called")
     try:
         request = PaymentInitiationRecipientCreateRequest(
             name='John Doe',
@@ -211,6 +226,7 @@ def create_link_token_for_payment():
 def create_link_token():
     global user_token
     global user_id
+    app.logger.info("/api/create_link_token called")
     try:
         # Build request based on whether we have user_token or user_id
         cra_products = ["cra_base_report", "cra_income_insights", "cra_partner_insights"]
@@ -257,6 +273,10 @@ def create_link_token():
             )
     # create link token
         response = client.link_token_create(request)
+        jsondRequest = jsonify(request.to_dict())
+        jsondResponse = jsonify(response.to_dict())
+        app.logger.info("request" + str(jsondRequest))
+        app.logger.info("response" + str(jsondResponse))
         return jsonify(response.to_dict())
     except plaid.ApiException as e:
         print(e)
@@ -269,6 +289,7 @@ def create_user_token():
     global user_token
     global user_id
     client_user_id = "user_" + str(uuid.uuid4())
+    app.logger.info("/api/create_user_token called")
 
     try:
         user_create_request = UserCreateRequest(
@@ -310,6 +331,11 @@ def create_user_token():
             user_token = user_response['user_token']
         if 'user_id' in user_response:
             user_id = user_response['user_id']
+
+        jsondRequest = user_create_request.to_dict()
+        jsondResponse = user_response.to_dict()
+        app.logger.info("request" + str(jsondRequest))
+        app.logger.info("response" + str(jsondResponse))
         return jsonify(user_response.to_dict())
     except plaid.ApiException as e:
         # Retry with consumer_report_user_identity if identity fails
@@ -359,12 +385,15 @@ def get_access_token():
     global access_token
     global item_id
     global transfer_id
+    app.logger.info("/api/set_access_token called")
     public_token = request.form['public_token']
     try:
         exchange_request = ItemPublicTokenExchangeRequest(
             public_token=public_token)
         exchange_response = client.item_public_token_exchange(exchange_request)
         access_token = exchange_response['access_token']
+        with open("linus.txt", 'a') as f:
+            f.write(access_token)
         item_id = exchange_response['item_id']
         return jsonify(exchange_response.to_dict())
     except plaid.ApiException as e:
@@ -403,6 +432,9 @@ def get_transactions():
     modified = []
     removed = [] # Removed transaction ids
     has_more = True
+    app.logger.info("/api/transactions called, attempting to write access token to linus.txt file")
+    with open("linus.txt", 'a') as f:
+        f.write("access_token=" + access_token)
     try:
         # Iterate through each page of new transaction updates for item
         while has_more:
@@ -412,6 +444,8 @@ def get_transactions():
             )
             response = client.transactions_sync(request).to_dict()
             cursor = response['next_cursor']
+            app.logger.info("request" + str(get_pretty_json_string(request)))
+            app.logger.info("response" + str(get_pretty_json_string(response)))
             # If no transactions are available yet, wait and poll the endpoint.
             # Normally, we would listen for a webhook, but the Quickstart doesn't 
             # support webhooks. For a webhook example, see 
@@ -426,7 +460,7 @@ def get_transactions():
             modified.extend(response['modified'])
             removed.extend(response['removed'])
             has_more = response['has_more']
-            pretty_print_response(response)
+            pretty_print_response(response) # TODO: commment this out, drowning the log file
 
         # Return the 8 most recent transactions
         latest_transactions = sorted(added, key=lambda t: t['date'])[-8:]
@@ -444,6 +478,7 @@ def get_transactions():
 
 @app.route('/api/identity', methods=['GET'])
 def get_identity():
+    app.logger.info('/api/identity called')
     try:
         request = IdentityGetRequest(
             access_token=access_token
@@ -463,6 +498,7 @@ def get_identity():
 
 @app.route('/api/balance', methods=['GET'])
 def get_balance():
+    app.logger.info('/api/balance called')
     try:
         balance_request = AccountsBalanceGetRequest(access_token=access_token)
         balance_response = client.accounts_balance_get(balance_request)
@@ -479,6 +515,7 @@ def get_balance():
 
 @app.route('/api/accounts', methods=['GET'])
 def get_accounts():
+    app.logger.info('/api/accounts called')
     try:
         request = AccountsGetRequest(
             access_token=access_token
@@ -499,6 +536,7 @@ def get_accounts():
 
 @app.route('/api/assets', methods=['GET'])
 def get_assets():
+    app.logger.info('/api/assets called')
     try:
         request = AssetReportCreateRequest(
             access_tokens=[access_token],
@@ -549,6 +587,7 @@ def get_assets():
 
 @app.route('/api/holdings', methods=['GET'])
 def get_holdings():
+    app.logger.info('/api/holdings called')
     try:
         request = InvestmentsHoldingsGetRequest(access_token=access_token)
         response = client.investments_holdings_get(request)
@@ -565,6 +604,7 @@ def get_holdings():
 
 @app.route('/api/investments_transactions', methods=['GET'])
 def get_investments_transactions():
+    app.logger.info('/api/investment_transactions called')
     # Pull transactions for the last 30 days
 
     start_date = (dt.datetime.now() - dt.timedelta(days=(30)))
@@ -592,6 +632,7 @@ def get_investments_transactions():
 
 @app.route('/api/transfer_authorize', methods=['GET'])
 def transfer_authorization():
+    app.logger.info('/api/transfer_authorize called')
     global authorization_id 
     global account_id
     request = AccountsGetRequest(access_token=access_token)
@@ -629,6 +670,7 @@ def transfer_authorization():
 
 @app.route('/api/transfer_create', methods=['GET'])
 def transfer():
+    app.logger.info('/api/transfer_create called')
     try:
         request = TransferCreateRequest(
             access_token=access_token,
@@ -644,6 +686,7 @@ def transfer():
 
 @app.route('/api/statements', methods=['GET'])
 def statements():
+    app.logger.info('/api/statements called')
     try:
         request = StatementsListRequest(access_token=access_token)
         response = client.statements_list(request)
@@ -671,6 +714,7 @@ def statements():
 
 @app.route('/api/signal_evaluate', methods=['GET'])
 def signal():
+    app.logger.info('/api/signal_evaluate called')
     global account_id
     request = AccountsGetRequest(access_token=access_token)
     response = client.accounts_get(request)
@@ -704,6 +748,7 @@ def signal():
 
 @app.route('/api/payment', methods=['GET'])
 def payment():
+    app.logger.info("/api/payment called")
     global payment_id
     try:
         request = PaymentInitiationPaymentGetRequest(payment_id=payment_id)
@@ -721,6 +766,7 @@ def payment():
 
 @app.route('/api/item', methods=['GET'])
 def item():
+    app.logger.info("/api/item called")
     try:
         request = ItemGetRequest(access_token=access_token)
         response = client.item_get(request)
@@ -742,6 +788,7 @@ def item():
 # PDF: https://plaid.com/docs/check/api/#cracheck_reportpdfget
 @app.route('/api/cra/get_base_report', methods=['GET'])
 def cra_check_report():
+    app.logger.info("/api/cra/get_base_report called")
     try:
         # Use user_token if available, otherwise use user_id
         if user_token:
@@ -772,6 +819,7 @@ def cra_check_report():
 # PDF w/ income insights: https://plaid.com/docs/check/api/#cracheck_reportpdfget
 @app.route('/api/cra/get_income_insights', methods=['GET'])
 def cra_income_insights():
+    app.logger.info("/api/cra/get_income_insights called")
     try:
         # Use user_token if available, otherwise use user_id
         insights_request = {}
@@ -803,6 +851,7 @@ def cra_income_insights():
 # https://plaid.com/docs/check/api/#cracheck_reportpartner_insightsget
 @app.route('/api/cra/get_partner_insights', methods=['GET'])
 def cra_partner_insights():
+    app.logger.info("/api/cra/get_partner_insights called")
     try:
         # Use user_token if available, otherwise use user_id
         if user_token:
@@ -837,8 +886,11 @@ def poll_with_retries(request_callback, ms=1000, retries_left=20):
                 retries_left -= 1
                 time.sleep(ms / 1000)
 
+def get_pretty_json_string(text):
+    return json.dumps(text, indent=2, sort_keys=True, default=str)
+
 def pretty_print_response(response):
-  print(json.dumps(response, indent=2, sort_keys=True, default=str))
+    print("FROM PRETTY", json.dumps(response, indent=2, sort_keys=True, default=str))
 
 def format_error(e):
     response = json.loads(e.body)
