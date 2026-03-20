@@ -6,6 +6,7 @@ import json
 import time
 from datetime import date, timedelta
 import uuid
+import psycopg2
 
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
@@ -87,6 +88,30 @@ PLAID_ENV = os.getenv('PLAID_ENV', 'sandbox')
 PLAID_PRODUCTS = os.getenv('PLAID_PRODUCTS', 'transactions').split(',')
 PLAID_COUNTRY_CODES = os.getenv('PLAID_COUNTRY_CODES', 'US').split(',')
 SIGNAL_RULESET_KEY = os.getenv('SIGNAL_RULESET_KEY', '')
+
+# DB Credentials
+DB_NAME=os.getenv('DB_NAME')
+DB_USER=os.getenv('DB_USER')
+DB_PASSWORD=os.getenv('DB_PASSWORD')
+DB_HOST=os.getenv('DB_HOST')
+DB_PORT=os.getenv('DB_PORT')
+
+"""
+Resolving connection errors to my local Postgres DB, note that the listen_address for my PC (192.168.1.74) is subject to change, likely need a more dynamic solution, 
+or could try to package Postgres into docker with a volume on my local
+
+Remember to "sudo systemctl restart posgresql" after applying config file changes!
+
+Added this to /etc/postgresql/16/main/postgresql.conf, resolved connection refused 500 error
+listen_addresses = 'localhost,192.168.1.74'             # what IP address(es) to listen on;
+
+Allow all docker network connections to postgres: added to /etc/postgresql/16/main/pg_hba.conf, resolved no entry for host error
+host    all     all     172.0.0.0/8      md5
+
+psycopg2.OperationalError: connection to server at "192.168.1.74", port 5432 failed: FATAL:  no pg_hba.conf entry for host 
+"172.18.0.3", user "postgres", database "plaid_test", SSL encryption
+connection to server at "192.168.1.74", port 5432 failed: FATAL:  no pg_hba.conf entry for host "172.18.0.3", user "postgres", database "plaid_test", no encryption
+"""
 
 def empty_to_none(field):
     value = os.getenv(field)
@@ -392,8 +417,40 @@ def get_access_token():
             public_token=public_token)
         exchange_response = client.item_public_token_exchange(exchange_request)
         access_token = exchange_response['access_token']
-        with open("linus.txt", 'a') as f:
-            f.write(access_token)
+        app.logger.info("Attempting Postgres connection")
+
+        user_name = 'linus_test' # TODO: dummy values
+        
+        # TODO: connection refused 500 error, check configuration at below
+        """
+        postgres=# SHOW config_file;
+               config_file               
+        -----------------------------------------
+        /etc/postgresql/16/main/postgresql.conf
+        """
+        conn = psycopg2.connect(
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            host=DB_HOST,
+            port=DB_PORT
+        )
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (username, access_token, item_id)
+            VALUES (%s, %s, %s)
+            """,
+            (user_name, access_token, exchange_response['item_id'])
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        app.logger.info(f"Created new plaid user at {DB_NAME}.users with values: {user_id}, {user_name}, {access_token}, {exchange_response['item_id']}")
+
+        with open("exchange_response.txt", 'a') as f:
+            for k, v in exchange_response.to_dict().items():
+                f.write(f'{str(k)}={str(v)}\n')
         item_id = exchange_response['item_id']
         return jsonify(exchange_response.to_dict())
     except plaid.ApiException as e:
@@ -433,8 +490,6 @@ def get_transactions():
     removed = [] # Removed transaction ids
     has_more = True
     app.logger.info("/api/transactions called, attempting to write access token to linus.txt file")
-    with open("linus.txt", 'a') as f:
-        f.write("access_token=" + access_token)
     try:
         # Iterate through each page of new transaction updates for item
         while has_more:

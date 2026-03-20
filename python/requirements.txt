@@ -3,3 +3,4 @@ plaid_python==38.1.0
 python-dotenv==1.2.1
 itsdangerous==2.2.0
 werkzeug==3.1.5
+psycopg2-binary==2.9.9
