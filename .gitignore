@@ -48,6 +48,7 @@ docker-compose.local*.yml
 
 *.iml
 .env
+sandbox.env
 prod.env
 .idea
 
